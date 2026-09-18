@@ -1,0 +1,88 @@
+name: Container Build
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: docker
+    timeout-minutes: 30
+    container:
+      image: ghcr.io/catthehacker/ubuntu:act-latest
+    env:
+      DOCKER_BUILDKIT: "0"
+    steps:
+      - name: Checkout
+        env:
+          GIT_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+          git init
+          git remote add origin "http://192.168.11.92:3000/${GITHUB_REPOSITORY}.git"
+          git -c http.extraHeader="AUTHORIZATION: bearer ${GIT_TOKEN}" \
+            fetch --depth 1 origin "${GITHUB_SHA}"
+          git checkout --force FETCH_HEAD
+          git reset --hard "${GITHUB_SHA}"
+
+      - name: Check docker daemon
+        run: |
+          set -eu
+          command -v docker >/dev/null 2>&1 || { echo "docker CLI missing in job container" >&2; exit 1; }
+          docker info
+
+      - name: Resolve Forgejo registry image
+        run: |
+          REGISTRY_HOST="$(echo "${GITHUB_SERVER_URL}" | sed -E 's#^https?://##')"
+          IMAGE_REPO="$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          echo "REGISTRY_HOST=${REGISTRY_HOST}" >> "${GITHUB_ENV}"
+          echo "IMAGE_NAME=${REGISTRY_HOST}/${IMAGE_REPO}" >> "${GITHUB_ENV}"
+          echo "SHORT_SHA=$(echo "${GITHUB_SHA}" | cut -c1-7)" >> "${GITHUB_ENV}"
+
+      - name: Build image
+        run: |
+          docker build \
+            --build-arg GROKBOT_CLIENT_GIT=http://192.168.11.92:3000/kenzim/grokbot-client.git \
+            -t "${IMAGE_NAME}:${SHORT_SHA}" .
+          if [ "${GITHUB_REF_NAME}" = "main" ]; then
+            docker tag "${IMAGE_NAME}:${SHORT_SHA}" "${IMAGE_NAME}:latest"
+          fi
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            docker tag "${IMAGE_NAME}:${SHORT_SHA}" "${IMAGE_NAME}:${GITHUB_REF_NAME}"
+          fi
+
+      - name: Login to registry
+        if: github.event_name != 'pull_request'
+        run: |
+          REGISTRY_USER="${{ secrets.REGISTRY_USER }}"
+          REGISTRY_TOKEN="${{ secrets.REGISTRY_TOKEN }}"
+          if [ -z "${REGISTRY_TOKEN}" ]; then
+            REGISTRY_TOKEN="${{ secrets.PACKAGE_WRITABLE_TOKEN }}"
+          fi
+          if [ -z "${REGISTRY_USER}" ] || [ -z "${REGISTRY_TOKEN}" ]; then
+            echo "Missing registry creds. Set REGISTRY_USER and REGISTRY_TOKEN (or PACKAGE_WRITABLE_TOKEN)." >&2
+            exit 1
+          fi
+          echo "${REGISTRY_TOKEN}" | docker login "${REGISTRY_HOST}" \
+            --username "${REGISTRY_USER}" \
+            --password-stdin
+
+      - name: Push image
+        if: github.event_name != 'pull_request'
+        run: |
+          docker push "${IMAGE_NAME}:${SHORT_SHA}" || {
+            echo "Push failed. Ensure token has package write permission for ${IMAGE_NAME}." >&2
+            exit 1
+          }
+          if [ "${GITHUB_REF_NAME}" = "main" ]; then
+            docker push "${IMAGE_NAME}:latest"
+          fi
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            docker push "${IMAGE_NAME}:${GITHUB_REF_NAME}"
+          fi

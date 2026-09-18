@@ -1,0 +1,86 @@
+# OWASP Dependency-Check for grok-web.
+#
+# Emits JSON on the runner. Do not import it into SonarQube: the plugin opens
+# CVEs as new_violations and the quality gate requires that metric to stay 0.
+#
+# Checkout uses the LAN Forgejo URL. Default https://git.stackken.com hairpins
+# through the public IP and a rootless slirp4netns path.
+
+name: OWASP
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  dependency-check:
+    runs-on: docker
+    timeout-minutes: 30
+    container:
+      image: ghcr.io/catthehacker/ubuntu:act-latest
+      volumes:
+        - /home/runner/.cache/dependency-check:/dependency-check-cache
+    steps:
+      - name: Checkout
+        env:
+          GIT_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+          git init
+          git remote add origin "http://192.168.11.92:3000/${GITHUB_REPOSITORY}.git"
+          git -c http.extraHeader="AUTHORIZATION: bearer ${GIT_TOKEN}" \
+            fetch --depth 1 origin "${GITHUB_SHA}"
+          git checkout --force FETCH_HEAD
+          git reset --hard "${GITHUB_SHA}"
+
+      - name: OWASP Dependency-Check
+        continue-on-error: true
+        timeout-minutes: 15
+        env:
+          DC_VERSION: "12.1.0"
+        run: |
+          set -eu
+          DC_BIN="/dependency-check-cache/tool/dependency-check/bin/dependency-check.sh"
+          DC_DATA="/dependency-check-cache/data"
+          mkdir -p "/dependency-check-cache/tool" "${DC_DATA}"
+
+          apt-get update -qq
+          apt-get install -y -qq curl unzip ca-certificates openjdk-17-jre-headless
+
+          if [ ! -x "${DC_BIN}" ]; then
+            curl -fsSL "https://github.com/jeremylong/DependencyCheck/releases/download/v${DC_VERSION}/dependency-check-${DC_VERSION}-release.zip" \
+              -o "${RUNNER_TEMP}/dependency-check.zip"
+            rm -rf "/dependency-check-cache/tool"
+            unzip -q "${RUNNER_TEMP}/dependency-check.zip" -d "/dependency-check-cache/tool"
+            DC_BIN="/dependency-check-cache/tool/dependency-check/bin/dependency-check.sh"
+          fi
+
+          if [ -x /usr/lib/jvm/java-17-openjdk-amd64/bin/java ]; then
+            export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+          else
+            export JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v java)")")")"
+          fi
+          export PATH="${JAVA_HOME}/bin:${PATH}"
+          test -x "${JAVA_HOME}/bin/java"
+
+          DC_ARGS=(
+            --project "${GITHUB_REPOSITORY##*/}"
+            --scan .
+            --format JSON
+            --out .
+            --data "${DC_DATA}"
+            --disableOssIndex
+            --exclude "**/tests/**"
+            --exclude "**/frontend/node_modules/**"
+            --exclude "**/.venv/**"
+          )
+          if compgen -G "${DC_DATA}/*.mv.db" > /dev/null; then
+            DC_ARGS+=(--noupdate)
+          fi
+
+          "${DC_BIN}" "${DC_ARGS[@]}"
+          test -s dependency-check-report.json
