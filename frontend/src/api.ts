@@ -68,6 +68,37 @@ export type GrokEvent = {
   turn_id?: string;
 };
 
+export interface AuthStatus {
+  password_enabled: boolean;
+  authenticated: boolean;
+  needs_login: boolean;
+}
+
+export interface CursorStatus {
+  signed_in: boolean;
+  source: string | null;
+  has_refresh: boolean;
+  has_api_key: boolean;
+  expires_at: number | null;
+  expired: boolean;
+  subject: string;
+  account?: Account | null;
+}
+
+export interface LoginStatus {
+  state: string;
+  url: string | null;
+  error: string | null;
+}
+
+export interface SettingsPayload {
+  password_enabled: boolean;
+  cursor: CursorStatus;
+  login: LoginStatus;
+}
+
+export const AUTH_EVENT = "grokweb:auth";
+
 async function parseError(res: Response): Promise<string> {
   const text = await res.text();
   try {
@@ -82,11 +113,15 @@ async function parseError(res: Response): Promise<string> {
 export async function api(path: string, init?: RequestInit): Promise<unknown> {
   const res = await fetch(path, {
     ...init,
+    credentials: "include",
     headers: {
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
       ...(init?.headers || {}),
     },
   });
+  if (res.status === 401 && !path.startsWith("/api/auth/")) {
+    window.dispatchEvent(new Event(AUTH_EVENT));
+  }
   if (!res.ok) throw new Error(await parseError(res));
   return await res.json();
 }

@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from backend.runtime import Hub, Runtime
+from grokbot.errors import AuthError
 from grokbot.models import Agent, SendReceipt, TranscriptEntry, TranscriptPage
 
 
@@ -34,7 +35,7 @@ async def test_hub_broadcast_drops_dead_clients():
 @pytest.mark.asyncio
 async def test_runtime_require_and_passthrough():
     rt = Runtime()
-    with pytest.raises(RuntimeError, match="not started"):
+    with pytest.raises(AuthError, match="not signed in"):
         rt.require()
 
     client = MagicMock()
@@ -283,7 +284,7 @@ async def test_start_and_stop_close_client(monkeypatch):
             closed.append(True)
 
     monkeypatch.setattr("backend.runtime.grokbot.GrokBotClient", lambda auth=None: Client())
-    monkeypatch.setattr("backend.runtime.grokbot.auth.auto", lambda: object())
+    monkeypatch.setattr("backend.runtime.build_auth", lambda: object())
     monkeypatch.setattr("backend.runtime.load_cursors", lambda path=None: {})
     monkeypatch.setattr("backend.runtime.save_cursors", lambda *a, **k: None)
     rt = Runtime()
@@ -292,7 +293,7 @@ async def test_start_and_stop_close_client(monkeypatch):
     await rt.stop()
     assert closed == [True]
     assert stopped == [True]
-    with pytest.raises(RuntimeError, match="not started"):
+    with pytest.raises(AuthError, match="not signed in"):
         rt.require()
 
 
@@ -317,3 +318,18 @@ async def test_stop_when_cursor_save_fails(monkeypatch):
     watcher.stop.assert_awaited()
     client.close.assert_awaited()
     assert rt.client is None
+
+
+@pytest.mark.asyncio
+async def test_start_without_cursor_records_error(monkeypatch):
+    def boom():
+        raise AuthError("nope")
+
+    monkeypatch.setattr("backend.runtime.build_auth", boom)
+    rt = Runtime()
+    await rt.start()
+    assert rt.client is None
+    assert rt.last_error == "nope"
+    with pytest.raises(AuthError, match="nope"):
+        rt.require()
+    await rt.stop()

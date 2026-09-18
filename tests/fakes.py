@@ -42,6 +42,9 @@ class StubRuntime:
         }
         self.desktop_result = {"token": "tok", "run_state": "RUNNING", "has_vnc": True}
 
+    async def reload_client(self) -> None:
+        self.calls.append(("reload_client", None))
+
     async def _maybe_fail(self) -> None:
         if self.fail is not None:
             raise self.fail

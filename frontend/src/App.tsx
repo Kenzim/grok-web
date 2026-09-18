@@ -5,6 +5,7 @@ import Chat from "./components/Chat";
 import DesktopPane from "./components/DesktopPane";
 import HandoffToast, { type Handoff } from "./components/HandoffToast";
 import Roster from "./components/Roster";
+import Settings from "./components/Settings";
 import { applyEvent, bubblesFromEntries, type Bubble } from "./transcript";
 
 export default function App() {
@@ -19,6 +20,7 @@ export default function App() {
   const [composing, setComposing] = useState<Set<string>>(new Set());
   const [handoffs, setHandoffs] = useState<Handoff[]>([]);
   const [desktopOpen, setDesktopOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const selected = useMemo(
     () => agents.find((a) => a.agent_id === selectedId) || null,
@@ -53,7 +55,11 @@ export default function App() {
         if (cancelled) return;
         setMe(account);
         setBootError(null);
-        await loadAgents();
+        try {
+          await loadAgents();
+        } catch (e) {
+          if (!cancelled) setChatError(e instanceof Error ? e.message : String(e));
+        }
       } catch (e) {
         if (!cancelled) setBootError(e instanceof Error ? e.message : String(e));
       }
@@ -145,13 +151,25 @@ export default function App() {
           <strong>Grok Bot</strong>
           <span className="muted">{me?.email || ""}</span>
         </div>
-        {selected && selected.harness !== "temporal" ? (
-          <button type="button" onClick={() => setDesktopOpen(true)}>
-            Desktop
+        <div className="row">
+          {selected && selected.harness !== "temporal" ? (
+            <button type="button" onClick={() => setDesktopOpen(true)}>
+              Desktop
+            </button>
+          ) : null}
+          <button type="button" onClick={() => setSettingsOpen(true)}>
+            Settings
           </button>
-        ) : null}
+        </div>
       </header>
-      {bootError ? <div className="error pad">{bootError}</div> : null}
+      {bootError ? (
+        <div className="error pad">
+          {bootError}{" "}
+          <button type="button" onClick={() => setSettingsOpen(true)}>
+            Open settings
+          </button>
+        </div>
+      ) : null}
       <div className="shell">
         <Roster
           agents={agents}
@@ -172,6 +190,17 @@ export default function App() {
         />
         {desktopOpen ? <DesktopPane onClose={() => setDesktopOpen(false)} /> : null}
       </div>
+      {settingsOpen ? (
+        <Settings
+          onClose={() => setSettingsOpen(false)}
+          onCursorChanged={() => {
+            void loadAgents().catch(() => undefined);
+            void api("/api/me")
+              .then((account) => setMe(account as Account))
+              .catch((e) => setBootError(e instanceof Error ? e.message : String(e)));
+          }}
+        />
+      ) : null}
       <HandoffToast
         items={handoffs}
         onOpen={(agentId) => {

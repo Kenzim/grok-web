@@ -12,6 +12,7 @@ from fastapi import WebSocket
 from grokbot.errors import AuthError, GrokBotError, NotFoundError, RefusalError, UnauthorizedError
 from grokbot.events import WidgetRequest
 
+from backend.cursor_creds import build_auth
 from backend.cursors import load_cursors, save_cursors
 from backend.serialize import (
     account_json,
@@ -66,9 +67,20 @@ class Runtime:
         self._last_cursor_save = 0.0
 
     async def start(self) -> None:
-        self.client = grokbot.GrokBotClient(auth=grokbot.auth.auto())
         self._stop.clear()
+        try:
+            self.client = grokbot.GrokBotClient(auth=build_auth())
+            self.last_error = None
+        except Exception as exc:
+            self.client = None
+            self.last_error = str(exc)
+            log.exception("cursor client failed to start")
+            return
         self._task = asyncio.create_task(self._watch_loop(), name="grok-web-watch")
+
+    async def reload_client(self) -> None:
+        await self.stop()
+        await self.start()
 
     async def stop(self) -> None:
         self._stop.set()
@@ -94,7 +106,7 @@ class Runtime:
 
     def require(self) -> grokbot.GrokBotClient:
         if self.client is None:
-            raise RuntimeError("GrokBot client is not started")
+            raise AuthError(self.last_error or "Cursor is not signed in")
         return self.client
 
     async def _watch_loop(self) -> None:

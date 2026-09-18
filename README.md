@@ -4,7 +4,9 @@ Browser UI for Grok Bot cloud agents. A FastAPI BFF imports [`grokbot`](https://
 
 ## Run
 
-Needs a Cursor login on the machine (`~/.config/cursor/auth.json`) or `GROKBOT_TOKEN`.
+Needs a Cursor login. Open **Settings** and use Sign in with Cursor (browser PKCE; tokens stay on the server), paste a dashboard API key, or keep using host files (`~/.config/cursor/auth.json` / `GROKBOT_TOKEN`).
+
+Optional instance password: Settings → Instance password. When enabled, every `/api/*` and `/ws/*` route except `/api/health` and `/api/auth/login|status` requires a session cookie.
 
 ```bash
 python3 -m venv .venv
@@ -32,7 +34,10 @@ cd frontend && npm test
 docker build -t grok-web .
 # override the grokbot-client git URL if needed:
 docker build --build-arg GROKBOT_CLIENT_GIT=https://git.stackken.com/kenzim/grokbot-client.git -t grok-web .
-docker run --rm -p 8787:8787 -v ~/.config/cursor:/root/.config/cursor:ro grok-web
+docker run --rm -p 8787:8787 \
+  -v grok-web-data:/app/data \
+  -v ~/.config/cursor:/root/.config/cursor:ro \
+  grok-web
 ```
 
 The image serves the built SPA from FastAPI on port 8787.

@@ -16,6 +16,7 @@ describe("api", () => {
     expect(out).toEqual({ email: "a@b.c" });
     const headers = fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>;
     expect(headers["Content-Type"]).toBe("application/json");
+    expect(fetchMock.mock.calls[0]?.[1]?.credentials).toBe("include");
   });
 
   it("throws FastAPI detail strings", async () => {
@@ -54,6 +55,21 @@ describe("api", () => {
       }),
     );
     await expect(api("/api/me")).rejects.toThrow("HTTP 503");
+  });
+
+  it("dispatches an auth event on 401", async () => {
+    const seen: string[] = [];
+    window.addEventListener("grokweb:auth", () => seen.push("yes"));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        text: async () => JSON.stringify({ detail: "auth required" }),
+      }),
+    );
+    await expect(api("/api/me")).rejects.toThrow("auth required");
+    expect(seen).toEqual(["yes"]);
   });
 });
 
