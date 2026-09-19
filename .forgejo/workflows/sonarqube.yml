@@ -131,27 +131,38 @@ jobs:
           mkdir -p "${CACHE}"
           serverUrl="${SONAR_HOST_URL%/}"
 
-          engine_json="$(curl --http1.1 -fsSL -u "${SONAR_TOKEN}:" "${serverUrl}/api/v2/analysis/engine")"
+          echo "Prefetching scanner engine over HTTP/1.1"
+          engine_json="$(curl --http1.1 --retry 4 --retry-delay 2 --max-time 180 -fsSL \
+            -u "${SONAR_TOKEN}:" "${serverUrl}/api/v2/analysis/engine")"
           engine_name="$(jq -r '.filename' <<< "${engine_json}")"
           engine_sha="$(jq -r '.sha256' <<< "${engine_json}")"
           engine_dir="${CACHE}/${engine_sha}"
           mkdir -p "${engine_dir}"
           if [ ! -f "${engine_dir}/${engine_name}" ]; then
-            curl --http1.1 -fsSL -u "${SONAR_TOKEN}:" -H "Accept: application/octet-stream" \
-              "${serverUrl}/api/v2/analysis/engine" -o "${engine_dir}/${engine_name}"
+            curl --http1.1 --retry 4 --retry-delay 2 --max-time 180 -fL \
+              -u "${SONAR_TOKEN}:" -H "Accept: application/octet-stream" \
+              "${serverUrl}/api/v2/analysis/engine" -o "${engine_dir}/${engine_name}.part"
+            mv "${engine_dir}/${engine_name}.part" "${engine_dir}/${engine_name}"
           fi
+          echo "Engine cached: ${engine_name}"
 
-          plugins_tsv="$(curl --http1.1 -fsSL -u "${SONAR_TOKEN}:" "${serverUrl}/api/plugins/installed" \
-            | jq -r '.plugins[] | [.hash, .filename, .key] | @tsv')"
-          while IFS=$'\t' read -r hash filename key; do
-            dest="${CACHE}/${hash}/${filename}"
+          plugins_tsv="$(curl --http1.1 --retry 4 --retry-delay 2 --max-time 60 -fsSL \
+            -u "${SONAR_TOKEN}:" "${serverUrl}/api/plugins/installed" \
+            | jq -r '.plugins[] | [.hash, .key] | @tsv')"
+          while IFS=$'\t' read -r hash key; do
+            # Engine PluginFiles.jarInCache uses sonar-<key>-plugin.jar, not the
+            # versioned filename from the installed-plugins API.
+            dest="${CACHE}/${hash}/sonar-${key}-plugin.jar"
             mkdir -p "${CACHE}/${hash}"
             if [ ! -f "${dest}" ]; then
-              curl --http1.1 -fsSL -u "${SONAR_TOKEN}:" \
+              echo "Prefetching plugin ${key}"
+              curl --http1.1 --retry 4 --retry-delay 2 --max-time 180 -fL \
+                -u "${SONAR_TOKEN}:" \
                 "${serverUrl}/api/plugins/download?plugin=${key}" -o "${dest}.part"
               mv "${dest}.part" "${dest}"
             fi
           done <<< "${plugins_tsv}"
+          echo "Plugin cache ready"
 
           "${SCANNER_BIN}" \
             -Dsonar.scanner.skipJreProvisioning=true \
