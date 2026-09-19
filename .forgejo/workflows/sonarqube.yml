@@ -139,7 +139,8 @@ jobs:
           engine_dir="${CACHE}/${engine_sha}"
           mkdir -p "${engine_dir}"
           if [ ! -f "${engine_dir}/${engine_name}" ]; then
-            curl --http1.1 --retry 4 --retry-delay 2 --max-time 180 -fL \
+            curl --http1.1 --retry 8 --retry-all-errors --retry-delay 3 \
+              --max-time 300 --speed-limit 1000 --speed-time 45 -fL -C - \
               -u "${SONAR_TOKEN}:" -H "Accept: application/octet-stream" \
               "${serverUrl}/api/v2/analysis/engine" -o "${engine_dir}/${engine_name}.part"
             mv "${engine_dir}/${engine_name}.part" "${engine_dir}/${engine_name}"
@@ -156,9 +157,11 @@ jobs:
             mkdir -p "${CACHE}/${hash}"
             if [ ! -f "${dest}" ]; then
               echo "Prefetching plugin ${key}"
-              curl --http1.1 --retry 4 --retry-delay 2 --max-time 180 -fL \
+              curl --http1.1 --retry 8 --retry-all-errors --retry-delay 3 \
+                --max-time 300 --speed-limit 1000 --speed-time 45 -fL -C - \
                 -u "${SONAR_TOKEN}:" \
-                "${serverUrl}/api/plugins/download?plugin=${key}" -o "${dest}.part"
+                "${serverUrl}/api/plugins/download?plugin=${key}" -o "${dest}.part" \
+                || exit 1
               mv "${dest}.part" "${dest}"
             fi
           done <<< "${plugins_tsv}"
