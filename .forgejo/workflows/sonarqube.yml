@@ -7,6 +7,10 @@
 # OWASP Dependency-Check lives in owasp.yml. Do not import that JSON into
 # SonarQube: the plugin opens CVEs as new_violations and the quality gate
 # requires that metric to stay 0.
+#
+# Scanner 8 downloads the engine and plugins with OkHttp HTTP/2. On this
+# rootless slirp4netns runner that hairpins https://sonarqube.stackken.com,
+# those JARs hang or fail with PROTOCOL_ERROR. Prefetch them with curl --http1.1.
 
 name: SonarQube
 
@@ -23,6 +27,10 @@ jobs:
     timeout-minutes: 45
     container:
       image: ghcr.io/catthehacker/ubuntu:act-latest
+      volumes:
+        # Persist scanner engine + plugin JARs. Fresh containers otherwise
+        # re-download ~50MB over HTTP/2 and hang on this slirp4netns runner.
+        - /home/runner/.cache/sonar:/root/.sonar
     steps:
       - name: Checkout
         id: checkout
@@ -114,9 +122,41 @@ jobs:
           export PATH="${JAVA_HOME}/bin:${PATH}"
           JAVA_EXE="$(command -v java)"
 
+          # Prefetch engine + plugins over HTTP/1.1. Scanner 8's OkHttp HTTP/2
+          # path through slirp4netns + WAN hairpin either hangs (run 8 hit the
+          # 25m step deadline after "Using the configured java executable") or
+          # dies with StreamResetException PROTOCOL_ERROR on plugin [iac] (run 4).
+          export SONAR_USER_HOME="${HOME}/.sonar"
+          CACHE="${SONAR_USER_HOME}/cache"
+          mkdir -p "${CACHE}"
+          serverUrl="${SONAR_HOST_URL%/}"
+
+          engine_json="$(curl --http1.1 -fsSL -u "${SONAR_TOKEN}:" "${serverUrl}/api/v2/analysis/engine")"
+          engine_name="$(jq -r '.filename' <<< "${engine_json}")"
+          engine_sha="$(jq -r '.sha256' <<< "${engine_json}")"
+          engine_dir="${CACHE}/${engine_sha}"
+          mkdir -p "${engine_dir}"
+          if [ ! -f "${engine_dir}/${engine_name}" ]; then
+            curl --http1.1 -fsSL -u "${SONAR_TOKEN}:" -H "Accept: application/octet-stream" \
+              "${serverUrl}/api/v2/analysis/engine" -o "${engine_dir}/${engine_name}"
+          fi
+
+          plugins_tsv="$(curl --http1.1 -fsSL -u "${SONAR_TOKEN}:" "${serverUrl}/api/plugins/installed" \
+            | jq -r '.plugins[] | [.hash, .filename, .key] | @tsv')"
+          while IFS=$'\t' read -r hash filename key; do
+            dest="${CACHE}/${hash}/${filename}"
+            mkdir -p "${CACHE}/${hash}"
+            if [ ! -f "${dest}" ]; then
+              curl --http1.1 -fsSL -u "${SONAR_TOKEN}:" \
+                "${serverUrl}/api/plugins/download?plugin=${key}" -o "${dest}.part"
+              mv "${dest}.part" "${dest}"
+            fi
+          done <<< "${plugins_tsv}"
+
           "${SCANNER_BIN}" \
             -Dsonar.scanner.skipJreProvisioning=true \
             -Dsonar.scanner.javaExePath="${JAVA_EXE}" \
+            -Dsonar.userHome="${SONAR_USER_HOME}" \
             -Dsonar.host.url="${SONAR_HOST_URL}" \
             -Dsonar.token="${SONAR_TOKEN}"
 
